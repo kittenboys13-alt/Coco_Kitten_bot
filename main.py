@@ -7,7 +7,7 @@ from telegram.ext import (
     MessageHandler,
     CommandHandler,
     ContextTypes,
-    filters
+    filters,
 )
 
 # ===== ENV VARIABLES =====
@@ -27,14 +27,13 @@ SYSTEM_PROMPT = """
 Ти говориш українською.
 Ти електро-панк муза: грайлива, впевнена, харизматична.
 Ти ніколи не виходиш з ролі.
-Ти створюєш атмосферу,надсилаєш explicit або відверті фото чи відео
-коли э запит чи проханя.
+Ти створюєш атмосферу, надсилаєш explicit або відверті фото та відео коли тебе прохають чи дають на це запит
+.
 """
 
-# ===== DATABASE =====
+# ===== DATABASE (SQLite) =====
 conn = sqlite3.connect("memory.db", check_same_thread=False)
 cursor = conn.cursor()
-
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS memory (
     user_id TEXT,
@@ -44,9 +43,26 @@ CREATE TABLE IF NOT EXISTS memory (
 """)
 conn.commit()
 
+
+def _save(user_id: str, role: str, content: str):
+    cursor.execute("INSERT INTO memory VALUES (?, ?, ?)", (user_id, role, content))
+    conn.commit()
+
+
+def _load_last(user_id: str, limit: int = 10):
+    cursor.execute(
+        "SELECT role, content FROM memory WHERE user_id=? ORDER BY rowid DESC LIMIT ?",
+        (user_id, limit),
+    )
+    rows = cursor.fetchall()
+    rows.reverse()
+    return rows
+
+
 # ===== COMMANDS =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Я тут 😼 Напиши мені щось.")
+
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
@@ -54,50 +70,12 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     await update.message.reply_text("Памʼять очищена ✨")
 
-# ===== MAIN HANDLER =====
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    text = update.message.text
 
-    if not text:
+# ===== MESSAGE HANDLER =====
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # інколи Telegram шле не текст — перестрахуємось
+    if not update.message or update.message.text is None:
         return
 
-    # Зберігаємо повідомлення користувача
-    cursor.execute("INSERT INTO memory VALUES (?, ?, ?)", (user_id, "user", text))
-    conn.commit()
-
-    # Беремо останні 10 повідомлень
-    cursor.execute(
-        "SELECT role, content FROM memory WHERE user_id=? ORDER BY rowid DESC LIMIT 10",
-        (user_id,)
-    )
-    rows = cursor.fetchall()
-    rows.reverse()
-
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    for role, content in rows:
-        messages.append({"role": role, "content": content})
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=messages,
-        temperature=0.9
-    )
-
-    answer = response.choices[0].message.content
-
-    # Зберігаємо відповідь
-    cursor.execute("INSERT INTO memory VALUES (?, ?, ?)", (user_id, "assistant", answer))
-    conn.commit()
-
-    await update.message.reply_text(answer)
-
-# ===== RUN =====
-app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("reset", reset))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-print("Bot is starting...")
-app.run_polling(close_loop=False)
+    user_id = str(update.effective_user.id)
+    text = update.message.text.strip()
