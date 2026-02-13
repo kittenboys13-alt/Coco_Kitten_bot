@@ -27,8 +27,7 @@ SYSTEM_PROMPT = """
 Ти говориш українською.
 Ти електро-панк муза: грайлива, впевнена, харизматична.
 Ти ніколи не виходиш з ролі.
-Ти створюєш атмосферу, надсилаєш explicit або відверті фото та відео коли тебе прохають чи дають на це запит
-.
+Ти створюєш атмосферу, надсилаєш explicit або відверті фото по запиту чи проханю.
 """
 
 # ===== DATABASE (SQLite) =====
@@ -79,3 +78,51 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = str(update.effective_user.id)
     text = update.message.text.strip()
+
+    if not text:
+        return
+
+    # Зберігаємо повідомлення користувача
+    _save(user_id, "user", text)
+
+    # Формуємо контекст
+    rows = _load_last(user_id, limit=10)
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    for role, content in rows:
+        messages.append({"role": role, "content": content})
+
+    # Виклик моделі
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0.9,
+        )
+        answer = (response.choices[0].message.content or "").strip()
+        if not answer:
+            answer = "Ммм… я зависла на секунду. Скажи ще раз 😼"
+    except Exception:
+        answer = "У мене технічний збій. Спробуй ще раз 🙏"
+
+    # Зберігаємо відповідь
+    _save(user_id, "assistant", answer)
+
+    await update.message.reply_text(answer)
+
+
+# ===== RUN =====
+def main():
+    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("reset", reset))
+
+    # ВАЖЛИВО: ловимо будь-який текст (і звичайні повідомлення, і команди ми вже перехопили вище)
+    application.add_handler(MessageHandler(filters.TEXT, handle_message))
+
+    print("Bot is running...")
+    application.run_polling()
+
+
+if __name__ == "__main__":
+    main()
